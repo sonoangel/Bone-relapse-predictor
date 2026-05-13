@@ -3,7 +3,7 @@
 Web application that predicts bone relapse risk in breast cancer patients
 using gene expression profiles from primary tumors.
 
-**Live app:** [Open in Streamlit](https://sonoangel-bone-relapse-predictor.streamlit.app)
+**Live app:** [Open in Streamlit](https://bone-relapse-predictor-cjk5kzekxeqt2dccmbzpuq.streamlit.app/)
 
 ## How it works
 
