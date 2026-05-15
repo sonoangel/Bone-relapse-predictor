@@ -4,6 +4,7 @@ import numpy as np
 import joblib
 import plotly.graph_objects as go
 from pathlib import Path
+import shap
 
 st.set_page_config(
     page_title='Bone Relapse Predictor',
@@ -13,7 +14,6 @@ st.set_page_config(
 
 @st.cache_resource
 def cargar_modelo():
-    # Nota: Asegúrate de que estos archivos existan en tu directorio
     modelo   = joblib.load('mejor_modelo.pkl')
     scaler   = joblib.load('scaler.pkl')
     features = joblib.load('features_list.pkl')
@@ -59,7 +59,6 @@ with st.sidebar:
         st.markdown(f'- `{g}`')
     st.markdown(f'... and {len(features)-10} more')
 
-# --- SECCIÓN DE CARGA ---
 col1, col2 = st.columns([2, 1])
 with col1:
     archivo = st.file_uploader(
@@ -76,51 +75,47 @@ if archivo is not None:
     try:
         df = pd.read_csv(archivo, index_col=0)
         st.success(f'Loaded: {df.shape[0]} patients, {df.shape[1]} genes')
-        
-        # Validación de genes
+
         genes_ok  = [g for g in features if g in df.columns]
         genes_out = [g for g in features if g not in df.columns]
-        
-        if len(genes_ok) < 1: # Cambiado de 10 a 1 para evitar bloqueos si solo falta alguno, ajusta a tu gusto
+
+        if len(genes_ok) < 1:
             st.error('No matching genes found in the CSV.')
             st.stop()
-        
+
         if genes_out:
             st.warning(f'{len(genes_out)} genes missing — filling with mean of existing genes.')
             for g in genes_out:
                 df[g] = df[genes_ok].mean(axis=1)
-        
-        # Preparar datos y predecir
+
         X_pred    = df[features].values
         X_pred_sc = scaler.transform(X_pred)
         probs     = modelo.predict_proba(X_pred_sc)[:, 1]
         preds     = (probs >= umbral).astype(int)
-        
-        # Resultados
+
         st.divider()
         st.header('Prediction Results')
-        
+
         df_res = pd.DataFrame({
             'Patient':     df.index,
             'Probability': probs.round(3),
             'Risk':        ['HIGH' if p >= umbral else 'LOW' for p in probs],
             'Prediction':  ['Bone relapse risk' if p == 1 else 'Low risk' for p in preds]
         })
-        
+
         c1, c2, c3 = st.columns(3)
         c1.metric('Patients', len(df_res))
         c2.metric('High risk', int(preds.sum()))
         c3.metric('Low risk', int((preds == 0).sum()))
-        
+
         st.dataframe(df_res, use_container_width=True)
 
-        # --- GRÁFICO (Movido aquí adentro) ---
         st.divider()
         st.subheader('Risk Probability Distribution')
-        
+
         fig = go.Figure()
         colores_bar = ['#E84C4C' if p >= umbral else '#4C9BE8' for p in probs]
-        
+
         fig.add_trace(go.Bar(
             x=df_res['Patient'].tolist(),
             y=probs.tolist(),
@@ -128,35 +123,99 @@ if archivo is not None:
             text=[f'{p:.2f}' for p in probs],
             textposition='outside'
         ))
-        
+
         fig.add_hline(
             y=umbral, line_dash='dash',
             line_color='black',
             annotation_text=f'Threshold ({umbral})'
         )
-        
+
         fig.update_layout(
             title='Bone Relapse Probability per Patient',
             yaxis=dict(title='Probability', range=[0, 1.1]),
             xaxis=dict(title='Patient ID'),
             height=450
         )
-        
+
         st.plotly_chart(fig, use_container_width=True)
-        
+
         st.download_button(
             label='⬇️ Download results CSV',
             data=df_res.to_csv(index=False),
             file_name='predictions.csv',
             mime='text/csv'
         )
-        
+
+        # ── SHAP EXPLANATION ───────────────────────────────
+        st.divider()
+        st.subheader('🔍 Gene-level Explanation (SHAP)')
+        st.markdown('Which genes most influenced each prediction?')
+
+        try:
+            explainer = shap.LinearExplainer(
+                modelo, X_pred_sc,
+                feature_perturbation='interventional'
+            )
+            shap_vals = explainer.shap_values(X_pred_sc)
+
+            # Importancia global de genes
+            importancias = pd.DataFrame({
+                'Gene': features,
+                'Mean |SHAP|': np.abs(shap_vals).mean(axis=0)
+            }).sort_values('Mean |SHAP|', ascending=False).head(15)
+
+            fig_shap = go.Figure(go.Bar(
+                x=importancias['Mean |SHAP|'],
+                y=importancias['Gene'],
+                orientation='h',
+                marker_color='#7F77DD'
+            ))
+            fig_shap.update_layout(
+                title='Top 15 Most Influential Genes',
+                xaxis_title='Mean |SHAP value|',
+                yaxis=dict(autorange='reversed'),
+                height=450
+            )
+            st.plotly_chart(fig_shap, use_container_width=True)
+
+            # Explicación por paciente
+            if len(df_res) <= 10:
+                st.markdown('**Per-patient gene contributions:**')
+                paciente_sel = st.selectbox(
+                    'Select patient to explain:',
+                    df_res['Patient'].tolist()
+                )
+                idx_sel = df_res['Patient'].tolist().index(paciente_sel)
+                shap_pac = shap_vals[idx_sel]
+
+                top_idx   = np.argsort(np.abs(shap_pac))[-10:]
+                genes_top = [features[i] for i in top_idx]
+                shap_top  = [shap_pac[i] for i in top_idx]
+
+                fig_pac = go.Figure(go.Bar(
+                    x=shap_top,
+                    y=genes_top,
+                    orientation='h',
+                    marker_color=['#E84C4C' if s > 0 else '#4C9BE8'
+                                  for s in shap_top]
+                ))
+                fig_pac.update_layout(
+                    title=f'Gene contributions for {paciente_sel}',
+                    xaxis_title='SHAP value',
+                    height=400
+                )
+                st.plotly_chart(fig_pac, use_container_width=True)
+                st.caption('🔴 Red = pushes toward HIGH risk | '
+                           '🔵 Blue = pushes toward LOW risk')
+
+        except Exception as e:
+            st.warning(f'SHAP explanation not available: {str(e)}')
+
     except Exception as e:
         st.error(f'Error durante el procesamiento: {str(e)}')
 
 else:
     st.info('👆 Upload a CSV file to get predictions')
-    # Botón de muestra
     ruta_muestra = Path('muestra_test.csv')
     if ruta_muestra.exists():
         with open(ruta_muestra, 'rb') as f:
