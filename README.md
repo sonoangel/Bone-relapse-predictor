@@ -75,6 +75,14 @@ cd bone-relapse-predictor
 pip install -r requirements.txt
 streamlit run app.py
 ```
+## 📝 Technical Article
+
+**From Raw Data to Clinical Predictions: A Bioinformatics Pipeline
+for Breast Cancer Bone Relapse Using Python and Machine Learning**
+
+Published on Medium — [Read the article](https://medium.com/@lcarmonav10/from-raw-data-to-clinical-predictions-a-bioinformatics-pipeline-for-breast-cancer-bone-relapse-e1d99c5abc79)
+
+Covers the complete pipeline: QC → DEG → PCA → ML → SHAP → Deployment
 
 ---
 
